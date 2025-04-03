@@ -1,0 +1,42 @@
+from fastapi import FastAPI, Request
+import os
+import requests
+
+app = FastAPI()
+
+# Your Capital.com API credentials
+CAPITAL_API_KEY = "hPazUxfmhcehPjtd"
+CAPITAL_ACCOUNT_ID = "33244876"
+
+BASE_URL = "https://api-capital.backend-capital.com"
+HEADERS = {
+    "X-CAP-API-KEY": CAPITAL_API_KEY,
+    "Content-Type": "application/json",
+    "Accept": "application/json"
+}
+
+# Place an order function
+def place_order(direction: str, symbol: str = "XAUUSD", size: float = 1):
+    order_data = {
+        "market": symbol,
+        "side": direction.lower(),  # "buy" or "sell"
+        "type": "market",
+        "quantity": size,
+        "accountId": CAPITAL_ACCOUNT_ID
+    }
+    response = requests.post(f"{BASE_URL}/api/v1/orders", headers=HEADERS, json=order_data)
+    return response.json()
+
+# FastAPI route to receive TradingView alerts
+@app.post("/trade")
+async def receive_alert(request: Request):
+    data = await request.json()
+    direction = data.get("action")
+    symbol = data.get("symbol", "XAUUSD")
+    size = float(data.get("size", 1))
+
+    if direction in ["buy", "sell"]:
+        result = place_order(direction, symbol, size)
+        return {"status": "ok", "response": result}
+    else:
+        return {"status": "error", "message": "Invalid action"}
