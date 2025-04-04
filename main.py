@@ -1,85 +1,106 @@
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, Query
 import os
 import requests
+import logging
 
 app = FastAPI()
 
-# === ENV VARIABLES ===
+# === Logging ===
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logger = logging.getLogger(__name__)
+
+# === Capital.com Credentials ===
 CAPITAL_EMAIL = os.getenv("CAPITAL_EMAIL")
 CAPITAL_PASS = os.getenv("CAPITAL_PASS")
 
-# === HARDCODED EPICS ===
+BASE_URL = "https://api-capital.backend-capital.com"
+BASE_HEADERS = {
+    "Content-Type": "application/json",
+    "Accept": "application/json"
+}
+
+# === Manual EPIC Mapping (fallbacks) ===
 TICKER_TO_EPIC = {
     "GOLD": "CC.D.XAUUSD.CFD.IP",
     "SILVER": "CC.D.XAGUSD.CFD.IP",
-    "USDJPY": "CS.D.USDJPY.CFD.IP",
     "EURUSD": "CS.D.EURUSD.CFD.IP",
-    "NATURALGAS": "CC.D.NATGAS.CFD.IP",
-    "OIL": "CC.D.BRENT.CFD.IP",  # or "CC.D.WTI.CFD.IP"
+    "USDJPY": "CS.D.USDJPY.CFD.IP",
+    "OIL": "CC.D.WTI.CFD.IP",
+    "NATGAS": "CC.D.NATGAS.CFD.IP"
 }
 
-# === AUTH ===
-def get_auth_token():
-    url = "https://api-capital.backend-capital.com/api/v1/session"
+def login_to_capital():
+    url = f"{BASE_URL}/api/v1/session"
     payload = {
         "identifier": CAPITAL_EMAIL,
         "password": CAPITAL_PASS
     }
-    headers = {"Content-Type": "application/json", "Accept": "application/json"}
-
-    response = requests.post(url, json=payload, headers=headers)
+    response = requests.post(url, json=payload, headers=BASE_HEADERS)
     response.raise_for_status()
+    return response.json().get("token")
 
-    data = response.json()
-    return {
-        "Authorization": f"Bearer {data['oauthToken']['access_token']}",
-        "CST": data['accountInfo']['clientId'],
-        "X-SECURITY-TOKEN": data['oauthToken']['access_token'],
-        "Content-Type": "application/json",
-        "Accept": "application/json"
-    }
+@app.get("/")
+def read_root():
+    return {"status": "Capital Trading Bot is running"}
 
-# === TRADE EXECUTION ===
-def place_trade(symbol: str, action: str, size: int):
+@app.get("/check-epic")
+def check_epic(symbol: str = Query(..., description="Search term like XAUUSD or EURUSD")):
+    url = f"{BASE_URL}/api/v1/markets?searchTerm={symbol}"
+    try:
+        response = requests.get(url, headers=BASE_HEADERS)
+        response.raise_for_status()
+        markets = response.json().get("markets", [])
+        return {
+            "status": "ok",
+            "symbol": symbol,
+            "epics": [
+                {
+                    "name": m["instrumentName"],
+                    "epic": m["epic"],
+                    "type": m["instrumentType"],
+                    "expiry": m.get("expiry")
+                } for m in markets
+            ]
+        }
+    except Exception as e:
+        logger.error(f"EPIC lookup failed: {e}")
+        return {"status": "error", "message": str(e)}
+
+@app.post("/trade")
+def trade(payload: dict):
+    symbol = payload.get("symbol")
+    action = payload.get("action")
+    size = payload.get("size")
+
     epic = TICKER_TO_EPIC.get(symbol.upper())
     if not epic:
         return {"error": f"Could not find epic for: {symbol}"}
 
-    headers = get_auth_token()
-    payload = {
+    try:
+        token = login_to_capital()
+    except Exception as e:
+        logger.error(f"Login failed: {e}")
+        return {"error": f"Login failed: {e}"}
+
+    order_url = f"{BASE_URL}/api/v1/positions"
+    headers = {
+        **BASE_HEADERS,
+        "Authorization": f"Bearer {token}"
+    }
+
+    order_payload = {
         "epic": epic,
-        "direction": action.upper(),
+        "direction": action,
         "size": size,
         "orderType": "MARKET",
         "timeInForce": "FILL_OR_KILL",
-        "guaranteedStop": False,
-        "forceOpen": True,
-        "currencyCode": "USD"
+        "dealReference": f"auto-{symbol.lower()}"
     }
 
-    url = "https://api-capital.backend-capital.com/api/v1/positions"
-    response = requests.post(url, json=payload, headers=headers)
-    response.raise_for_status()
-
-    return {"status": "ok", "response": response.json()}
-
-# === API ENDPOINT ===
-@app.post("/trade")
-async def receive_alert(req: Request):
-    data = await req.json()
-    symbol = data.get("symbol")
-    action = data.get("action")
-    size = data.get("size")
-
-    if not all([symbol, action, size]):
-        raise HTTPException(status_code=400, detail="Missing parameters.")
-
     try:
-        result = place_trade(symbol, action, int(size))
-        return result
+        order_response = requests.post(order_url, json=order_payload, headers=headers)
+        order_response.raise_for_status()
+        return {"status": "ok", "response": order_response.json()}
     except Exception as e:
+        logger.error(f"Order failed: {e}")
         return {"status": "error", "message": str(e)}
-
-@app.get("/")
-def root():
-    return {"status": "Capital bot is live ✅"}
