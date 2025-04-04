@@ -9,7 +9,7 @@ app = FastAPI()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
-# === Capital.com API Key ===
+# === Capital.com API Credentials ===
 CAPITAL_API_KEY = os.getenv("CAPITAL_API_KEY")
 
 BASE_URL = "https://api-capital.backend-capital.com"
@@ -19,50 +19,60 @@ BASE_HEADERS = {
     "Accept": "application/json"
 }
 
-# === Manual Ticker to EPIC Mapping ===
+# === Manual EPIC Mapping ===
 TICKER_TO_EPIC = {
     "GOLD": "CC.D.XAUUSD.CFD.IP",
     "SILVER": "CC.D.XAGUSD.CFD.IP",
     "EURUSD": "CS.D.EURUSD.CFD.IP",
-    "NATGAS": "CC.D.NATGAS.CFD.IP",
-    "USDJPY": "CS.D.USDJPY.CFD.IP"
+    "USDJPY": "CS.D.USDJPY.CFD.IP",
+    "OIL": "CC.D.USOIL.CFD.IP",
+    "NATGAS": "CC.D.NATGAS.CFD.IP"
 }
 
 @app.get("/")
-def root():
-    return {"status": "Capital.com bot using API key is live"}
+def read_root():
+    return {"status": "Capital Trading Bot is live using API Key 🔐"}
 
 @app.post("/trade")
-def trade(payload: dict):
-    symbol = payload.get("symbol")
-    action = payload.get("action")
-    size = payload.get("size")
+def place_trade(request: Request):
+    try:
+        data = request.json()
+    except Exception as e:
+        logger.error(f"Invalid JSON in request: {e}")
+        raise HTTPException(status_code=400, detail="Invalid JSON")
 
-    if not all([symbol, action, size]):
-        raise HTTPException(status_code=400, detail="Missing symbol, action, or size")
+    symbol = data.get("symbol")
+    direction = data.get("action")
+    size = data.get("size")
+
+    if not symbol or not direction or not size:
+        raise HTTPException(status_code=400, detail="Missing required fields")
 
     epic = TICKER_TO_EPIC.get(symbol.upper())
     if not epic:
-        return {"error": f"Unsupported symbol or EPIC not mapped: {symbol}"}
+        return {"error": f"Unknown symbol: {symbol}"}
 
-    # Define direction (BUY or SELL)
-    direction = "BUY" if action.lower() == "buy" else "SELL"
-
-    # Create market order payload
-    order = {
-        "epic": epic,
-        "direction": direction,
-        "size": size,
-        "orderType": "MARKET",
-        "guaranteedStop": False,
-        "currencyCode": "USD",
-        "forceOpen": True
-    }
+    logger.info(f"Placing trade for {symbol} ({epic}): {direction} x {size}")
 
     try:
-        response = requests.post(f"{BASE_URL}/api/v1/positions", headers=BASE_HEADERS, json=order)
+        url = f"{BASE_URL}/api/v1/positions"
+        payload = {
+            "epic": epic,
+            "direction": direction.upper(),
+            "size": size,
+            "orderType": "MARKET",
+            "currencyCode": "USD",
+            "forceOpen": True,
+            "guaranteedStop": False,
+            "timeInForce": "FILL_OR_KILL",
+            "dealReference": f"bot-{symbol.lower()}"
+        }
+
+        response = requests.post(url, headers=BASE_HEADERS, json=payload)
         response.raise_for_status()
+
         return {"status": "ok", "response": response.json()}
-    except Exception as e:
-        logger.error(f"Trade error: {e}")
+
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Trade failed: {e}")
         return {"status": "error", "message": str(e)}
