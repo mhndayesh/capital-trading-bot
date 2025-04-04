@@ -8,7 +8,6 @@ from typing import Optional
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger(__name__)
 
-# === FastAPI app ===
 app = FastAPI()
 
 # === Environment Variables ===
@@ -32,7 +31,6 @@ BASE_HEADERS = {
     "Accept": "application/json"
 }
 
-# === Known EPICs ===
 TICKER_TO_EPIC = {
     "XAUUSD": "CC.D.XAUUSD.CFD.IP",
     "XAGUSD": "CC.D.XAGUSD.CFD.IP",
@@ -161,3 +159,8 @@ def check_epic(symbol: str = Query(...)):
 @app.get("/")
 def read_root():
     return {"status": "Capital.com Trading Bot is running"}
+
+# === Render-friendly launch ===
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0")
