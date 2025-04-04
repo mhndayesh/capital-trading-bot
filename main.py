@@ -1,14 +1,13 @@
 from fastapi import FastAPI, Request
-import os
 import requests
 
 app = FastAPI()
 
-# Capital.com API credentials (set in Render environment or hardcoded for testing)
-CAPITAL_API_KEY = os.getenv("hPazUxfmhcehPjtd") or "hPazUxfmhcehPjtd"
-CAPITAL_ACCOUNT_ID = os.getenv("33244876") or "33244876"
+# ✅ Your Capital.com credentials (DO NOT SHARE THIS)
+CAPITAL_API_KEY = "hPazUxfmhcehPjtd"
+CAPITAL_ACCOUNT_ID = "33244876"
 
-# Capital.com API URL and headers
+# Capital.com API details
 BASE_URL = "https://api-capital.backend-capital.com"
 HEADERS = {
     "X-CAP-API-KEY": CAPITAL_API_KEY,
@@ -16,12 +15,12 @@ HEADERS = {
     "Accept": "application/json"
 }
 
-# Function to send real market order
+# ✅ Send order to Capital.com
 def place_order(direction: str, symbol: str = "XAUUSD", size: float = 1):
     order_data = {
         "market": symbol,
-        "side": direction.lower(),  # must be "buy" or "sell"
-        "type": "market",           # instant market execution
+        "side": direction.lower(),  # buy or sell
+        "type": "market",
         "quantity": size,
         "accountId": CAPITAL_ACCOUNT_ID
     }
@@ -35,7 +34,7 @@ def place_order(direction: str, symbol: str = "XAUUSD", size: float = 1):
     except Exception as e:
         return {"error": str(e)}
 
-# Webhook endpoint to receive TradingView alerts
+# ✅ Webhook endpoint from TradingView alerts
 @app.post("/trade")
 async def trade_alert(request: Request):
     try:
@@ -47,9 +46,8 @@ async def trade_alert(request: Request):
         size = data.get("size", 1)
 
         if side not in ["buy", "sell"]:
-            return {"error": "Invalid order side. Use 'buy' or 'sell'."}
+            return {"error": "Invalid side. Use 'buy' or 'sell'."}
 
-        # Place the trade
         return place_order(side, symbol, size)
 
     except Exception as e:
