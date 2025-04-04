@@ -1,15 +1,13 @@
 import os
 import requests
-from fastapi import FastAPI, HTTPException, Request
-from dotenv import load_dotenv
-
-load_dotenv()  # Optional for local .env testing
+from fastapi import FastAPI, HTTPException
 
 app = FastAPI()
 
+# === CONFIG ===
 CAPITAL_API_KEY = os.getenv("CAPITAL_API_KEY")
-CAPITAL_API_PASS = os.getenv("CAPITAL_PASS")
-CAPITAL_API_EMAIL = os.getenv("CAPITAL_EMAIL")
+CAPITAL_EMAIL = os.getenv("CAPITAL_EMAIL")
+CAPITAL_PASS = os.getenv("CAPITAL_PASS")
 
 BASE_URL = "https://api-capital.backend-capital.com"
 SESSION_URL = f"{BASE_URL}/api/v1/session"
@@ -18,68 +16,64 @@ POSITIONS_URL = f"{BASE_URL}/api/v1/positions"
 HEADERS = {
     "X-CAP-API-KEY": CAPITAL_API_KEY,
     "Content-Type": "application/json",
-    "Accept": "application/json",
+    "Accept": "application/json"
 }
 
-# Static mapping
+# === EPIC Mapping (must be exact!) ===
 TICKER_TO_EPIC = {
     "GOLD": "CC.D.XAUUSD.CFD.IP",
     "SILVER": "CC.D.XAGUSD.CFD.IP",
     "EURUSD": "CS.D.EURUSD.CFD.IP",
     "USDJPY": "CS.D.USDJPY.CFD.IP",
-    "OIL": "CC.D.BRENT.CFD.IP",  # Example
+    "NATGAS": "CC.D.NATGAS.CFD.IP",
 }
 
-
-
 @app.post("/trade")
-def place_order(data: dict):
-    symbol = data.get("symbol")
-    action = data.get("action")
+def place_trade(data: dict):
+    symbol = data.get("symbol", "").upper()
+    action = data.get("action", "").lower()
     size = data.get("size")
 
-    epic = TICKER_TO_EPIC.get(symbol.upper())
+    epic = TICKER_TO_EPIC.get(symbol)
     if not epic:
-        raise HTTPException(status_code=404, detail="EPIC not found")
+        raise HTTPException(status_code=404, detail=f"EPIC not found for symbol: {symbol}")
 
+    # Step 1: Create session
     session_payload = {
-        "identifier": CAPITAL_API_EMAIL,
-        "password": CAPITAL_API_PASS,
+        "identifier": CAPITAL_EMAIL,
+        "password": CAPITAL_PASS,
         "encryptedPassword": False
     }
 
-    login_response = requests.post(SESSION_URL, headers=HEADERS, json=session_payload)
-    if login_response.status_code != 200:
-        return {"status": "error", "message": "Login failed", "details": login_response.text}
+    try:
+        response = requests.post(SESSION_URL, headers=HEADERS, json=session_payload)
+        response.raise_for_status()
+        cst = response.headers["CST"]
+        x_security_token = response.headers["X-SECURITY-TOKEN"]
+    except Exception as e:
+        return {"status": "error", "message": f"Login failed: {e}"}
 
-    cst = login_response.headers.get("CST")
-    x_sec = login_response.headers.get("X-SECURITY-TOKEN")
-
-    if not cst or not x_sec:
-        return {"status": "error", "message": "Missing CST or Security Token"}
-
-    order_headers = {
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "X-CAP-API-KEY": CAPITAL_API_KEY,
+    # Step 2: Place trade
+    trade_headers = {
+        **HEADERS,
         "CST": cst,
-        "X-SECURITY-TOKEN": x_sec
+        "X-SECURITY-TOKEN": x_security_token
     }
 
-    order_payload = {
+    trade_payload = {
         "epic": epic,
-        "direction": action.upper(),
+        "direction": action.upper(),  # BUY or SELL
         "size": size,
         "orderType": "MARKET",
-        "timeInForce": "FILL_OR_KILL",
         "guaranteedStop": False,
         "forceOpen": True,
-        "currencyCode": "USD"
+        "currencyCode": "USD",
+        "dealReference": "bot-trade"
     }
 
-    order_response = requests.post(POSITIONS_URL, headers=order_headers, json=order_payload)
-
-    if order_response.status_code == 200:
-        return {"status": "ok", "response": order_response.json()}
-    else:
-        return {"status": "error", "message": order_response.text}
+    try:
+        trade_response = requests.post(POSITIONS_URL, headers=trade_headers, json=trade_payload)
+        trade_response.raise_for_status()
+        return {"status": "ok", "response": trade_response.json()}
+    except Exception as e:
+        return {"status": "error", "message": str(e), "details": trade_response.text}
