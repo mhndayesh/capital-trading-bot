@@ -3,13 +3,14 @@ import os
 import requests
 import logging
 
+# === FastAPI setup ===
 app = FastAPI()
 
 # === Logging ===
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
-# === Capital.com credentials from environment ===
+# === Environment variables ===
 CAPITAL_API_KEY = os.getenv("CAPITAL_API_KEY")
 CAPITAL_EMAIL = os.getenv("CAPITAL_EMAIL")
 CAPITAL_PASS = os.getenv("CAPITAL_PASS")
@@ -21,17 +22,18 @@ BASE_HEADERS = {
     "Accept": "application/json"
 }
 
-# === Hardcoded EPICs ===
+# === Manual Epic Mapping ===
 TICKER_TO_EPIC = {
     "GOLD": "CC.D.XAUUSD.CFD.IP",
     "SILVER": "CC.D.XAGUSD.CFD.IP",
     "EURUSD": "CS.D.EURUSD.MINI.IP",
     "USDJPY": "CS.D.USDJPY.MINI.IP",
-    "XNGUSD": "CC.D.NATGAS.CFD.IP"
+    "NATURALGAS": "CC.D.NATGAS.CFD.IP",
+    "OIL": "CC.D.WTI.CFD.IP"
 }
 
-# === Session login to get CST and X-SECURITY-TOKEN ===
-def get_session_tokens():
+# === Authenticate to get CST + X-SEC ===
+def get_session():
     try:
         res = requests.post(f"{BASE_URL}/api/v1/session", headers=BASE_HEADERS, json={
             "identifier": CAPITAL_EMAIL,
@@ -43,56 +45,56 @@ def get_session_tokens():
             "X-SECURITY-TOKEN": res.headers.get("X-SECURITY-TOKEN")
         }
     except Exception as e:
-        logger.error(f"Login failed: {e}")
+        logger.error(f"Session login failed: {e}")
         return None
 
-# === Place a trade ===
+# === Place live trade ===
 def place_order(direction: str, epic: str, size: float):
-    session = get_session_tokens()
+    session = get_session()
     if not session:
         return {"error": "Authentication failed"}
 
     headers = BASE_HEADERS.copy()
     headers.update(session)
 
-    order_payload = {
+    payload = {
         "epic": epic,
         "direction": direction.upper(),  # BUY or SELL
-        "size": size,
-        "orderType": "MARKET"
+        "size": size
     }
 
     try:
-        response = requests.post(f"{BASE_URL}/api/v1/positions", headers=headers, json=order_payload)
-        response.raise_for_status()
-        return response.json()
+        res = requests.post(f"{BASE_URL}/api/v1/positions", headers=headers, json=payload)
+        res.raise_for_status()
+        return res.json()
     except Exception as e:
-        logger.error(f"Order failed: {e}")
+        logger.error(f"Trade failed: {e}")
         return {"error": str(e)}
 
-# === Webhook endpoint ===
+# === /trade webhook ===
 @app.post("/trade")
-async def trade_handler(request: Request):
+async def receive_alert(request: Request):
     try:
         data = await request.json()
-        symbol = data.get("symbol", "").upper()
-        direction = data.get("action", "").lower()
+        direction = data.get("action")
+        symbol = data.get("symbol", "GOLD").upper()
         size = float(data.get("size", 1))
+
+        if direction not in ["buy", "sell"]:
+            raise ValueError("Invalid action")
 
         epic = TICKER_TO_EPIC.get(symbol)
         if not epic:
             return {"error": f"Could not find epic for: {symbol}"}
 
-        if direction not in ["buy", "sell"]:
-            return {"error": f"Invalid action: {direction}"}
-
         result = place_order(direction, epic, size)
         return {"status": "ok", "response": result}
+
     except Exception as e:
         logger.error(f"Webhook error: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
 # === Health check ===
 @app.get("/")
-def root():
-    return {"status": "Bot running ✅"}
+def read_root():
+    return {"status": "Capital Trading Bot is running"}
