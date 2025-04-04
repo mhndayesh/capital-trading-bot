@@ -89,3 +89,33 @@ async def receive_alert(request: Request):
 @app.get("/")
 def read_root():
     return {"status": "Capital Trading Bot is running"}
+
+
+from fastapi import Query  # make sure this is at the top if not already
+
+@app.get("/check-epic")
+def check_epic(symbol: str = Query(..., description="Search term like XAUUSD or EURUSD")):
+    url = f"{BASE_URL}/api/v1/markets?searchTerm={symbol}"
+    headers = {
+        "X-CAP-API-KEY": CAPITAL_API_KEY,
+        "Accept": "application/json"
+    }
+
+    try:
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        markets = response.json().get("markets", [])
+        return {
+            "status": "ok",
+            "epics": [
+                {
+                    "name": m["instrumentName"],
+                    "epic": m["epic"],
+                    "type": m["instrumentType"],
+                    "expiry": m.get("expiry", "-")
+                } for m in markets
+            ]
+        }
+    except Exception as e:
+        logger.error(f"EPIC lookup error: {e}")
+        return {"status": "error", "message": str(e)}
