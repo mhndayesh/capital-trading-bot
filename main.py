@@ -9,7 +9,7 @@ app = FastAPI()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
-# === Capital.com Credentials ===
+# === ENV ===
 CAPITAL_API_KEY = os.getenv("CAPITAL_API_KEY")
 CAPITAL_EMAIL = os.getenv("CAPITAL_EMAIL")
 CAPITAL_PASS = os.getenv("CAPITAL_PASS")
@@ -21,19 +21,17 @@ BASE_HEADERS = {
     "Accept": "application/json"
 }
 
-# === Manual EPIC Mapping (fallbacks) ===
+# === Predefined EPICs (CFDs only!) ===
 TICKER_TO_EPIC = {
-    "GOLD": "GOLD",
-    "SILVER": "SILVER",
-    "XAUUSD": "CC.D.XAUUSD.CFD.IP",
-    "XAGUSD": "CC.D.XAGUSD.CFD.IP",
+    "XAUUSD": "CC.D.XAUUSD.CFD.IP",  # Gold CFD
+    "XAGUSD": "CC.D.XAGUSD.CFD.IP",  # Silver CFD
     "EURUSD": "CS.D.EURUSD.MINI.IP",
     "USDJPY": "CS.D.USDJPY.MINI.IP",
-    "NATURALGAS": "CC.D.NATGAS.CFD.IP",
-    "XNGUSD": "CC.D.NATGAS.CFD.IP"
+    "NATGAS": "CC.D.NATGAS.CFD.IP",
+    "OIL": "CC.D.WTI.CFD.IP"  # US Oil CFD
 }
 
-# === Capital Session ===
+# === Login to Capital.com ===
 def get_session():
     try:
         res = requests.post(f"{BASE_URL}/api/v1/session", headers=BASE_HEADERS, json={
@@ -46,10 +44,10 @@ def get_session():
             "X-SECURITY-TOKEN": res.headers.get("X-SECURITY-TOKEN")
         }
     except Exception as e:
-        logger.error(f"Session login failed: {e}")
+        logger.error(f"❌ Session login failed: {e}")
         return None
 
-# === Place Order ===
+# === Place trade ===
 def place_order(direction: str, epic: str, size: float):
     session = get_session()
     if not session:
@@ -60,7 +58,7 @@ def place_order(direction: str, epic: str, size: float):
 
     payload = {
         "epic": epic,
-        "direction": direction.upper(),
+        "direction": direction.upper(),  # BUY or SELL
         "size": size
     }
 
@@ -69,42 +67,33 @@ def place_order(direction: str, epic: str, size: float):
         res.raise_for_status()
         return res.json()
     except Exception as e:
-        logger.error(f"Trade failed: {e}")
+        logger.error(f"❌ Trade error: {e}")
         return {"error": str(e)}
 
-# === /trade webhook ===
+# === /trade ===
 @app.post("/trade")
 async def receive_alert(request: Request):
     try:
         data = await request.json()
-        symbol = data.get("symbol")
         direction = data.get("action")
+        symbol = data.get("symbol", "").upper()
         size = float(data.get("size", 1))
 
-        if not symbol or not direction:
-            raise HTTPException(status_code=400, detail="Missing required fields")
+        if direction not in ["buy", "sell"]:
+            raise ValueError("Invalid action")
 
-        # Lookup epic
-        epic = TICKER_TO_EPIC.get(symbol.upper())
+        epic = TICKER_TO_EPIC.get(symbol)
         if not epic:
-            return {"error": f"Could not find epic for: {symbol}"}
+            return {"error": f"❌ Could not find epic for: {symbol}"}
 
         result = place_order(direction, epic, size)
         return {"status": "ok", "response": result}
+
     except Exception as e:
-        logger.error(f"Webhook error: {e}")
+        logger.error(f"❌ Webhook error: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
-# === /check-epic route ===
-from fastapi import FastAPI, Request, HTTPException, Query
-import requests
-import os
-
-app = FastAPI()
-
-CAPITAL_API_KEY = os.getenv("CAPITAL_API_KEY")
-BASE_URL = "https://api-capital.backend-capital.com"
-
+# === /check-epic ===
 @app.get("/check-epic")
 def check_epic(symbol: str = Query(..., description="Search term like gold, silver, eurusd")):
     url = f"{BASE_URL}/api/v1/markets?searchTerm={symbol}"
@@ -134,11 +123,10 @@ def check_epic(symbol: str = Query(..., description="Search term like gold, silv
             ]
         }
     except Exception as e:
+        logger.error(f"❌ EPIC lookup error: {e}")
         return {"status": "error", "message": str(e)}
 
-
 # === Health check ===
-@app.get("/", include_in_schema=False)
-@app.head("/", include_in_schema=False)
-def root():
-    return {"status": "Capital Bot is running ✅"}
+@app.get("/")
+def read_root():
+    return {"status": "✅ Capital Trading Bot is live"}
