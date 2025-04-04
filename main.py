@@ -3,11 +3,11 @@ import requests
 
 app = FastAPI()
 
-# ✅ Your Capital.com credentials (DO NOT SHARE THIS)
+# ✅ Your Capital.com credentials
 CAPITAL_API_KEY = "hPazUxfmhcehPjtd"
 CAPITAL_ACCOUNT_ID = "33244876"
 
-# Capital.com API details
+# ✅ Capital.com API setup
 BASE_URL = "https://api-capital.backend-capital.com"
 HEADERS = {
     "X-CAP-API-KEY": CAPITAL_API_KEY,
@@ -15,12 +15,27 @@ HEADERS = {
     "Accept": "application/json"
 }
 
-# ✅ Send order to Capital.com
-def place_order(direction: str, symbol: str = "XAUUSD", size: float = 1):
+# ✅ Trade size logic based on symbol
+def get_trade_size(symbol: str) -> float:
+    symbol = symbol.upper()
+    if symbol == "XAUUSD":
+        return 2
+    elif symbol == "XAGUSD":
+        return 150
+    elif symbol == "EURUSD":
+        return 8000
+    elif symbol == "XNGUSD":
+        return 2000
+    else:
+        return 1  # default fallback
+
+# ✅ Send live market order
+def place_order(direction: str, symbol: str):
+    size = get_trade_size(symbol)
     order_data = {
         "market": symbol,
-        "side": direction.lower(),  # buy or sell
-        "type": "market",
+        "side": direction.lower(),  # must be "buy" or "sell"
+        "type": "market",           # instant execution
         "quantity": size,
         "accountId": CAPITAL_ACCOUNT_ID
     }
@@ -34,7 +49,7 @@ def place_order(direction: str, symbol: str = "XAUUSD", size: float = 1):
     except Exception as e:
         return {"error": str(e)}
 
-# ✅ Webhook endpoint from TradingView alerts
+# ✅ Webhook route for TradingView alerts
 @app.post("/trade")
 async def trade_alert(request: Request):
     try:
@@ -42,13 +57,11 @@ async def trade_alert(request: Request):
         print("🚨 Alert received:", data)
 
         side = data.get("side")
-        symbol = data.get("symbol", "XAUUSD")
-        size = data.get("size", 1)
-
+        symbol = data.get("symbol", "XAUUSD")  # default to gold
         if side not in ["buy", "sell"]:
-            return {"error": "Invalid side. Use 'buy' or 'sell'."}
+            return {"error": "Invalid order side. Use 'buy' or 'sell'."}
 
-        return place_order(side, symbol, size)
+        return place_order(side, symbol)
 
     except Exception as e:
         return {"error": str(e)}
