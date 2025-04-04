@@ -1,32 +1,21 @@
 from fastapi import FastAPI, Request
-import os
 import requests
 
 app = FastAPI()
 
-# Capital.com environment credentials
-CAPITAL_EMAIL = os.getenv("CAPITAL_EMAIL")
-CAPITAL_PASS = os.getenv("CAPITAL_PASS")
+# === Capital.com account credentials ===
+CAPITAL_API_KEY = "hPazUxfmhcehPjtd"
 CAPITAL_ACCOUNT_ID = "33244876"
 
-# Capital.com API details
+# === Capital.com API config ===
 BASE_URL = "https://api-capital.backend-capital.com"
 HEADERS = {
+    "X-CAP-API-KEY": CAPITAL_API_KEY,
     "Content-Type": "application/json",
     "Accept": "application/json"
 }
 
-# Authenticate and get token
-def get_auth_token():
-    auth_data = {
-        "identifier": CAPITAL_EMAIL,
-        "password": CAPITAL_PASS
-    }
-    response = requests.post(f"{BASE_URL}/api/v1/session", json=auth_data, headers=HEADERS)
-    token = response.json().get("token")
-    return token
-
-# Choose correct trade size
+# === Trade size logic ===
 def get_trade_size(symbol: str) -> float:
     symbol = symbol.upper()
     if symbol == "XAUUSD":
@@ -37,42 +26,43 @@ def get_trade_size(symbol: str) -> float:
         return 8000
     elif symbol == "XNGUSD":
         return 2000
-    return 1  # fallback
+    return 1  # default fallback
 
-# Place trade on Capital.com
-def place_order(direction: str, symbol: str = "XAUUSD"):
-    token = get_auth_token()
-    if not token:
-        return {"error": "Failed to authenticate."}
+# === Send order to Capital.com ===
+def place_order(direction: str, symbol: str):
+    size = get_trade_size(symbol)
 
-    quantity = get_trade_size(symbol)
     order_data = {
         "market": symbol,
-        "side": direction.lower(),
-        "type": "market",
-        "quantity": quantity,
+        "side": direction.lower(),  # "buy" or "sell"
+        "type": "market",           # market execution
+        "quantity": size,
         "accountId": CAPITAL_ACCOUNT_ID
     }
 
     print("📤 Sending order to Capital.com:", order_data)
 
-    headers_with_auth = HEADERS.copy()
-    headers_with_auth["Authorization"] = f"Bearer {token}"
+    try:
+        response = requests.post(f"{BASE_URL}/api/v1/orders", headers=HEADERS, json=order_data)
+        print("🧾 Response:", response.status_code, response.text)
+        return response.json()
+    except Exception as e:
+        print("❌ Request failed:", str(e))
+        return {"error": str(e)}
 
-    response = requests.post(f"{BASE_URL}/api/v1/orders", headers=headers_with_auth, json=order_data)
-    print("🧾 Response:", response.status_code, response.text)
-    return response.json()
-
-# Receive TradingView alert
+# === Webhook to receive alerts from TradingView ===
 @app.post("/trade")
-async def trade_alert(request: Request):
+async def receive_alert(request: Request):
     data = await request.json()
     print("🚨 Alert received:", data)
 
     side = data.get("side")
-    symbol = data.get("symbol", "XAUUSD")
+    symbol = data.get("symbol")
 
-    if side not in ["buy", "sell"]:
-        return {"error": "Invalid order side"}
+    if not side or not symbol:
+        return {"error": "Missing 'side' or 'symbol' in alert."}
+    
+    if side.lower() not in ["buy", "sell"]:
+        return {"error": "Invalid side. Must be 'buy' or 'sell'."}
 
     return place_order(side, symbol)
