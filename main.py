@@ -83,7 +83,10 @@ def get_session_tokens():
         cst_token = response.headers.get('CST')
         x_sec_token = response.headers.get('X-SECURITY-TOKEN')
         # --- ### ADDED: Extract accountId from RESPONSE BODY ### ---
-        account_id = response_json.get('accountId') # Extract from parsed JSON
+      # Inside get_session_tokens function
+
+        # --- ### ADDED: Extract accountId from RESPONSE BODY ### ---
+        account_id = response_json.get('currentAccountId') # <--- CORRECTED LINE
         # --- ### END ADDED ### ---
 
 
