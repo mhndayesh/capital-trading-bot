@@ -27,8 +27,10 @@ TICKER_TO_EPIC = {
     "SILVER": "CC.D.XAGUSD.CFD.IP",
     "EURUSD": "CS.D.EURUSD.CFD.IP",
     "USDJPY": "CS.D.USDJPY.CFD.IP",
-    "XNGUSD": "CC.D.NATGAS.CFD.IP"
+    "OIL": "CC.D.BRENT.CFD.IP",  # Example
 }
+
+
 
 @app.post("/trade")
 def place_order(data: dict):
