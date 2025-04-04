@@ -2,7 +2,7 @@ from fastapi import FastAPI, Request, HTTPException
 import os
 import requests
 import logging
-
+from fastapi import Query
 app = FastAPI()
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
