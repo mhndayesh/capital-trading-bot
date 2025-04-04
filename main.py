@@ -96,8 +96,17 @@ async def receive_alert(request: Request):
         raise HTTPException(status_code=400, detail=str(e))
 
 # === /check-epic route ===
+from fastapi import FastAPI, Request, HTTPException, Query
+import requests
+import os
+
+app = FastAPI()
+
+CAPITAL_API_KEY = os.getenv("CAPITAL_API_KEY")
+BASE_URL = "https://api-capital.backend-capital.com"
+
 @app.get("/check-epic")
-def check_epic(symbol: str = Query(..., description="Search any symbol like USDJPY or GOLD")):
+def check_epic(symbol: str = Query(..., description="Search term like gold, silver, eurusd")):
     url = f"{BASE_URL}/api/v1/markets?searchTerm={symbol}"
     headers = {
         "X-CAP-API-KEY": CAPITAL_API_KEY,
@@ -107,18 +116,26 @@ def check_epic(symbol: str = Query(..., description="Search any symbol like USDJ
     try:
         response = requests.get(url, headers=headers)
         response.raise_for_status()
-        data = response.json()
+        markets = response.json().get("markets", [])
+
+        if not markets:
+            return {"status": "not_found", "symbol": symbol, "epics": []}
+
         return {
             "status": "ok",
             "symbol": symbol,
-            "epics": data.get("markets", [])
+            "epics": [
+                {
+                    "name": m["instrumentName"],
+                    "epic": m["epic"],
+                    "type": m["instrumentType"],
+                    "expiry": m.get("expiry", "-")
+                } for m in markets
+            ]
         }
     except Exception as e:
-        logger.error(f"EPIC lookup failed: {e}")
-        return {
-            "status": "error",
-            "message": str(e)
-        }
+        return {"status": "error", "message": str(e)}
+
 
 # === Health check ===
 @app.get("/", include_in_schema=False)
