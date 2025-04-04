@@ -1,5 +1,8 @@
 import os
 import requests
+from fastapi import FastAPI
+
+app = FastAPI()
 
 # === CONFIG ===
 CAPITAL_API_KEY = os.getenv("CAPITAL_API_KEY") or "YOUR_API_KEY"
