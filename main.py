@@ -4,17 +4,19 @@ import requests
 import logging
 from typing import Optional
 
-# --- Logging ---
-logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)-8s] %(message)s')
+# === Logging ===
+logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger(__name__)
 
+# === FastAPI app ===
 app = FastAPI()
 
-# --- Environment Variables ---
+# === Environment Variables ===
 CAPITAL_EMAIL = os.getenv("CAPITAL_EMAIL")
 CAPITAL_PASS = os.getenv("CAPITAL_PASS")
 CAPITAL_API_KEY = os.getenv("CAPITAL_API_KEY")
 
+# === Check for missing keys ===
 missing_vars = []
 if not CAPITAL_EMAIL: missing_vars.append("CAPITAL_EMAIL")
 if not CAPITAL_PASS: missing_vars.append("CAPITAL_PASS")
@@ -22,6 +24,7 @@ if not CAPITAL_API_KEY: missing_vars.append("CAPITAL_API_KEY")
 if missing_vars:
     logger.critical(f"Missing environment variables: {', '.join(missing_vars)}")
 
+# === API Config ===
 BASE_URL = "https://api-capital.backend-capital.com"
 BASE_HEADERS = {
     "X-CAP-API-KEY": CAPITAL_API_KEY or "MISSING",
@@ -29,19 +32,21 @@ BASE_HEADERS = {
     "Accept": "application/json"
 }
 
+# === Known EPICs ===
 TICKER_TO_EPIC = {
     "XAUUSD": "CC.D.XAUUSD.CFD.IP",
     "XAGUSD": "CC.D.XAGUSD.CFD.IP",
     "EURUSD": "CS.D.EURUSD.MINI.IP",
     "NATURALGAS": "CC.D.NATGAS.CFD.IP",
-    "XNGUSD": "CC.D.NATGAS.CFD.IP"
+    "XNGUSD": "CC.D.NATGAS.CFD.IP",
 }
 
+# === Capital.com Session ===
 def get_session_data():
-    if not CAPITAL_EMAIL or not CAPITAL_PASS or not CAPITAL_API_KEY:
-        logger.error("Missing credentials for session.")
-        return None
-    auth_data = {"identifier": CAPITAL_EMAIL, "password": CAPITAL_PASS}
+    auth_data = {
+        "identifier": CAPITAL_EMAIL,
+        "password": CAPITAL_PASS
+    }
     try:
         response = requests.post(f"{BASE_URL}/api/v1/session", json=auth_data, headers=BASE_HEADERS)
         response.raise_for_status()
@@ -54,22 +59,33 @@ def get_session_data():
         logger.error(f"Session error: {e}")
     return None
 
+# === Trade Size Logic ===
 def get_trade_size(symbol: str) -> float:
     symbol = symbol.upper()
-    if "XAUUSD" in symbol: return 0.02
-    if "XAGUSD" in symbol: return 10
-    if "EURUSD" in symbol: return 10000
-    if "BTCUSD" in symbol: return 0.001
-    if "NATURALGAS" in symbol or "XNGUSD" in symbol: return 100
+    if "XAUUSD" in symbol: return 2
+    if "XAGUSD" in symbol: return 150
+    if "EURUSD" in symbol: return 8000
+    if "NATURALGAS" in symbol or "XNGUSD" in symbol: return 2000
     return 1.0
 
+# === Order Placement ===
 def place_order(direction: str, epic: str, size: float):
     session = get_session_data()
     if not session:
         return {"error": "Authentication Failed"}
+
     headers = BASE_HEADERS.copy()
-    headers.update({"CST": session["cst"], "X-SECURITY-TOKEN": session["x_sec_token"]})
-    payload = {"epic": epic.upper(), "direction": direction.upper(), "size": size}
+    headers.update({
+        "CST": session["cst"],
+        "X-SECURITY-TOKEN": session["x_sec_token"]
+    })
+
+    payload = {
+        "epic": epic.upper(),
+        "direction": direction.upper(),
+        "size": size
+    }
+
     try:
         response = requests.post(f"{BASE_URL}/api/v1/positions", headers=headers, json=payload)
         response.raise_for_status()
@@ -78,6 +94,7 @@ def place_order(direction: str, epic: str, size: float):
         logger.error(f"Order error: {e}")
         return {"error": str(e)}
 
+# === /trade webhook ===
 @app.post("/trade")
 async def receive_alert(request: Request):
     try:
@@ -108,6 +125,7 @@ async def receive_alert(request: Request):
         raise HTTPException(status_code=500, detail=result)
     return {"status": "ok", "capital_response": result}
 
+# === /check-epic manual lookup ===
 @app.get("/check-epic")
 def check_epic(symbol: str = Query(...)):
     url = f"{BASE_URL}/api/v1/markets?searchTerm={symbol}"
@@ -115,12 +133,14 @@ def check_epic(symbol: str = Query(...)):
         "X-CAP-API-KEY": CAPITAL_API_KEY,
         "Accept": "application/json"
     }
+
     try:
         response = requests.get(url, headers=headers)
         response.raise_for_status()
         markets = response.json().get("markets", [])
         if not markets:
             return {"status": "not_found", "symbol": symbol, "epics": []}
+
         return {
             "status": "ok",
             "symbol": symbol,
@@ -137,6 +157,7 @@ def check_epic(symbol: str = Query(...)):
         logger.error(f"EPIC lookup error: {e}")
         return {"status": "error", "message": str(e)}
 
+# === Root health check ===
 @app.get("/")
 def read_root():
     return {"status": "Capital.com Trading Bot is running"}
