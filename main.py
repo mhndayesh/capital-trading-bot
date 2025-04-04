@@ -52,8 +52,8 @@ TICKER_TO_EPIC = {
     "XAUUSD": "GOLD",           # Confirmed
     "XAGUSD": "SILVER",         # Confirmed
     "EURUSD": "EURUSD",         # Confirmed
-    "NATURALGAS": "NATURAL_GAS", # <<< EXAMPLE - FIND THE CORRECT EPIC for Natural Gas!
-    "XNGUSD": "NATURAL_GAS",     # <<< EXAMPLE - Find if different epic needed for XNGUSD ticker
+    "NATURALGAS": "PLACEHOLDER_FIND_NATGAS_EPIC", # <<<=== FIND AND REPLACE THIS
+    "XNGUSD": "PLACEHOLDER_FIND_NATGAS_EPIC",     # <<<=== FIND AND REPLACE THIS (if needed)
     # Add mappings for ALL symbols you intend to trade
 }
 # ==================================================
@@ -96,10 +96,11 @@ def get_session_data(): # Renamed for clarity
 def get_trade_size(symbol: str) -> float:
     """ Returns a default trade size based on the symbol. Customize as needed. """
     symbol_upper = symbol.upper() if symbol else ""
+    # Example sizing (adjust these values based on your strategy/risk management)
     if "XAUUSD" in symbol_upper: return 0.02
+    if "XAGUSD" in symbol_upper: return 10 # Example for Silver
     if "EURUSD" in symbol_upper: return 10000
     if "BTCUSD" in symbol_upper: return 0.001
-    if "XAGUSD" in symbol_upper: return 10 # Example for Silver
     if "NATURALGAS" in symbol_upper or "XNGUSD" in symbol_upper: return 100 # Example for Nat Gas
     return 1.0 # Default size if symbol not matched
 
@@ -114,7 +115,7 @@ def place_order(direction: str, epic: str, size: float): # Accepts EPIC now
         return {"error": "Authentication Failed", "details": "Could not obtain session tokens/accountId. Check email/password/API Key env vars and API connectivity."}
 
     # --- 2. Extract dynamic data ---
-    # Note: accountId is NOT typically needed in the /positions payload
+    # Note: accountId is NOT typically needed in the /positions payload for placing order
     # dynamic_account_id = session_data.get('account_id')
     cst_token = session_data.get('cst')
     x_sec_token = session_data.get('x_sec_token')
@@ -124,14 +125,13 @@ def place_order(direction: str, epic: str, size: float): # Accepts EPIC now
     if not all([direction, epic, size]): return {"error": "Missing order parameters"}
     if direction.lower() not in ["buy", "sell"]: return {"error": f"Invalid direction: {direction}"}
     if size <= 0: return {"error": f"Invalid size: {size}"}
-    # No need to check dynamic_account_id here if not used in payload
+    # We extracted account ID earlier, but it seems it's not used in this specific payload
 
     # Use keys expected by /api/v1/positions endpoint
     position_data = {
-        "epic": epic.upper(),       # Use "epic" from mapping
+        "epic": epic.upper(),           # Use "epic" from mapping
         "direction": direction.upper(), # API usually expects uppercase BUY/SELL
-        "size": size                 # Use "size" key
-        # Removed "accountId" - usually derived from tokens/key
+        "size": size                    # Use "size" key
     }
 
     # --- 4. Prepare Headers with ALL required tokens ---
@@ -140,7 +140,7 @@ def place_order(direction: str, epic: str, size: float): # Accepts EPIC now
     headers_for_order['X-SECURITY-TOKEN'] = x_sec_token
 
     # --- 5. Send Order Request to Correct Endpoint ---
-    # <<<!!! VERIFY THIS PATH ('/api/v1/positions') in Capital.com API Docs if 404 persists !!!>>>
+    # <<<!!! VERIFY THIS PATH ('/api/v1/positions') in Capital.com API Docs if 404/other errors persist !!!>>>
     endpoint = f"{BASE_URL}/api/v1/positions" # Using /positions endpoint
     logger.info(f"📤 Sending position request to {endpoint}: {position_data}")
     logger.debug(f"  Using Headers: {headers_for_order}") # Log headers for debugging
@@ -156,7 +156,7 @@ def place_order(direction: str, epic: str, size: float): # Accepts EPIC now
         logger.error(f"HTTP error opening position: {http_err} - Response: {response.text}")
         try: error_details = response.json()
         except: error_details = response.text
-        return {"error": f"HTTP {response.status_code}", "details": error_details}
+        return {"error": f"HTTP {response.status_code}", "details": error_details} # Return dictionary indicating HTTP error
     except requests.exceptions.Timeout:
         logger.error("Timeout error opening position.")
         return {"error": "Request Timeout"}
@@ -219,11 +219,11 @@ async def receive_alert(request: Request):
         status_code = 500 # Default server error
         # Set specific status codes based on returned error details
         if result.get("error") == "Authentication Failed" : status_code = 503
-        # Check for common Capital.com error codes if available in details
-        elif '"errorCode":"error.market.market-closed"' in str(error_detail): status_code = 400 # Or maybe 503? Use 400 for client-side issue (timing)
-        elif '"errorCode":"error.insufficient-funds"' in str(error_detail): status_code = 400
-        elif '"errorCode":"error.not-found.epic"' in str(error_detail): status_code = 400 # Epic issue
-        elif result.get("error", "").startswith("HTTP 404"): status_code = 404 # Explicit 404 check
+        # Check common Capital.com error codes if available in details
+        elif '"errorCode":"error.market.market-closed"' in str(error_detail): status_code = 400 # Market closed is a valid rejection, return 400 maybe?
+        elif '"errorCode":"error.insufficient-funds"' in str(error_detail): status_code = 400 # Insufficient funds is like a bad request
+        elif '"errorCode":"error.not-found.epic"' in str(error_detail): status_code = 400 # Epic issue (shouldn't happen if map is good)
+        elif result.get("error", "").startswith("HTTP 404"): status_code = 404 # Explicit 404 check (if URL is still wrong)
         elif result.get("error", "").startswith("HTTP 4"): status_code = 400 # Other 4xx
         elif result.get("error") == "Request Timeout": status_code = 504
         elif result.get("error") == "Request failed": status_code = 502
@@ -242,4 +242,4 @@ def read_root():
 # if __name__ == "__main__":
 #      # Make sure env vars are set if running locally
 #      # uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
-#      pass
+#      pass # Typically run via Render's start command
