@@ -3,6 +3,41 @@ import os
 import requests
 import logging
 import sys # For sys.exit on critical error
+from fastapi import Query
+from typing import Optional
+
+@app.get("/check-epic")
+def check_epic(symbol: str = Query(..., description="Symbol like XAUUSD, XAGUSD, EURUSD, etc.")):
+    """Returns available Capital.com EPICs for a given symbol"""
+    url = f"{BASE_URL}/api/v1/markets?searchTerm={symbol}"
+    headers = {
+        "X-CAP-API-KEY": CAPITAL_API_KEY,
+        "Accept": "application/json"
+    }
+
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+
+        markets = data.get("markets", [])
+        if not markets:
+            return {"status": "not_found", "symbol": symbol, "epics": []}
+
+        epics = [
+            {
+                "name": m["instrumentName"],
+                "epic": m["epic"],
+                "type": m["instrumentType"],
+                "expiry": m.get("expiry", "-")
+            } for m in markets
+        ]
+
+        return {"status": "ok", "symbol": symbol, "epics": epics}
+
+    except Exception as e:
+        logger.error(f"❌ Error checking EPIC for {symbol}: {e}")
+        return {"status": "error", "message": str(e)}
 
 # --- Setup basic logging ---
 # Logs will appear in Render's log stream
