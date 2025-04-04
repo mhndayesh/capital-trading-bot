@@ -1,81 +1,180 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 import os
 import requests
+import logging
+import sys # For sys.exit on critical error
+
+# --- Setup basic logging ---
+# Logs will appear in Render's log stream
+logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)-8s] %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
-# ✅ Load credentials from environment variables (Render)
-CAPITAL_EMAIL = os.getenv("CAPITAL_EMAIL")
-CAPITAL_PASS = os.getenv("CAPITAL_PASS")
-CAPITAL_ACCOUNT_ID = "33244876"
+# === Load Credentials from Environment Variables ===
+# These MUST be set in your Render Environment Variables settings
+CAPITAL_API_KEY = os.getenv("CAPITAL_API_KEY")
+CAPITAL_SECURITY_TOKEN = os.getenv("CAPITAL_SECURITY_TOKEN") # The API Password/Token
+CAPITAL_ACCOUNT_ID = os.getenv("CAPITAL_ACCOUNT_ID")
 
-# ✅ Capital.com API base setup
-BASE_URL = "https://api-capital.backend-capital.com"
+# --- Validate Credentials ---
+if not CAPITAL_API_KEY:
+    logger.critical("CRITICAL ERROR: Environment variable CAPITAL_API_KEY is not set!")
+    # Optionally exit if running in production, or handle gracefully
+    # sys.exit("Exiting: Missing CAPITAL_API_KEY")
+if not CAPITAL_SECURITY_TOKEN:
+    logger.critical("CRITICAL ERROR: Environment variable CAPITAL_SECURITY_TOKEN is not set!")
+    # sys.exit("Exiting: Missing CAPITAL_SECURITY_TOKEN")
+if not CAPITAL_ACCOUNT_ID:
+    logger.critical("CRITICAL ERROR: Environment variable CAPITAL_ACCOUNT_ID is not set!")
+    # sys.exit("Exiting: Missing CAPITAL_ACCOUNT_ID")
+
+# === Capital.com API Setup ===
+BASE_URL = "https://api-capital.backend-capital.com" # Production API endpoint
+# Demo endpoint (if needed for testing): "https://demo-api-capital.backend-capital.com"
+
+# --- Headers for API Requests (Includes Authentication) ---
 HEADERS = {
+    "X-CAP-API-KEY": CAPITAL_API_KEY,
+    "X-SECURITY-TOKEN": CAPITAL_SECURITY_TOKEN, # Added the security token header
     "Content-Type": "application/json",
     "Accept": "application/json"
 }
 
-# ✅ Get authentication token using email + password
-def get_auth_token():
-    auth_data = {
-        "identifier": CAPITAL_EMAIL,
-        "password": CAPITAL_PASS
-    }
-    response = requests.post(f"{BASE_URL}/api/v1/session", json=auth_data, headers=HEADERS)
-    print("🔐 Auth response:", response.status_code, response.text)
-
-    if response.status_code == 200:
-        return response.json().get("token")
-    return None
-
-# ✅ Return trade size based on symbol
+# === Helper Function (Optional but good practice) ===
 def get_trade_size(symbol: str) -> float:
-    symbol = symbol.upper()
-    if symbol == "XAUUSD":
-        return 2
-    elif symbol == "XAGUSD":
-        return 150
-    elif symbol == "EURUSD":
-        return 8000
-    elif symbol == "XNGUSD":
-        return 2000
-    return 1  # default
+    """ Returns a default trade size based on the symbol. Customize as needed. """
+    symbol_upper = symbol.upper() if symbol else ""
+    # Example sizing (adjust these values based on your strategy/risk management)
+    if "XAUUSD" in symbol_upper: return 0.02 # Example: Smaller size for Gold
+    if "EURUSD" in symbol_upper: return 10000 # Example: Forex standard lot size base
+    if "BTCUSD" in symbol_upper: return 0.001 # Example: Crypto size
+    # Add more specific sizes for other symbols you trade
+    return 1.0 # Default size if symbol not matched
 
-# ✅ Place order to Capital.com
-def place_order(direction: str, symbol: str = "XAUUSD"):
-    token = get_auth_token()
-    if not token:
-        return {"error": "❌ Failed to authenticate — token is null."}
 
-    size = get_trade_size(symbol)
-    headers_with_auth = HEADERS.copy()
-    headers_with_auth["Authorization"] = f"Bearer {token}"
+# === Place Order Function ===
+def place_order(direction: str, symbol: str, size: float):
+    """Sends a market order to the Capital.com API."""
+
+    # Validate inputs before sending
+    if not all([direction, symbol, size]):
+         logger.error(f"Order placement failed: Missing direction, symbol, or size.")
+         return {"error": "Missing order parameters"}
+    if direction.lower() not in ["buy", "sell"]:
+         logger.error(f"Order placement failed: Invalid direction '{direction}'.")
+         return {"error": f"Invalid direction: {direction}"}
+    if size <= 0:
+         logger.error(f"Order placement failed: Invalid size '{size}'.")
+         return {"error": f"Invalid size: {size}"}
+    if not CAPITAL_API_KEY or not CAPITAL_SECURITY_TOKEN or not CAPITAL_ACCOUNT_ID:
+         logger.error("Order placement failed: API credentials not configured.")
+         return {"error": "Server configuration error: Missing API credentials."}
+
 
     order_data = {
-        "market": symbol,
-        "side": direction.lower(),  # "buy" or "sell"
-        "type": "market",
+        "market": symbol.upper(), # Ensure symbol is uppercase for API
+        "side": direction.lower(), # Ensure side is lowercase
+        "type": "market", # Market order
         "quantity": size,
         "accountId": CAPITAL_ACCOUNT_ID
     }
 
-    print("📤 Sending order to Capital.com:", order_data)
-    response = requests.post(f"{BASE_URL}/api/v1/orders", headers=headers_with_auth, json=order_data)
-    print("🧾 Order response:", response.status_code, response.text)
+    endpoint = f"{BASE_URL}/api/v1/orders"
+    logger.info(f"📤 Sending order to {endpoint}: {order_data}")
 
-    return response.json()
+    try:
+        response = requests.post(endpoint, headers=HEADERS, json=order_data, timeout=15) # Increased timeout slightly
+        response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
 
-# ✅ FastAPI webhook endpoint (TradingView will post here)
+        logger.info(f"🧾 Order response: {response.status_code} {response.text}")
+        return response.json() # Return the JSON response from Capital.com
+
+    except requests.exceptions.HTTPError as http_err:
+        logger.error(f"HTTP error placing order: {http_err} - Response: {response.text}")
+        return {"error": f"HTTP {response.status_code}", "details": response.text}
+    except requests.exceptions.Timeout:
+        logger.error("Timeout error placing order.")
+        return {"error": "Request Timeout"}
+    except requests.exceptions.RequestException as req_err:
+        logger.error(f"Request failed placing order: {req_err}")
+        return {"error": "Request failed", "details": str(req_err)}
+    except Exception as e:
+        # Catch other potential errors like JSON decoding errors
+        logger.error(f"Unexpected error during order placement or processing response: {e}", exc_info=True)
+        # Try to get text if possible, even on JSON decode error
+        try:
+             err_details = response.text if 'response' in locals() else str(e)
+        except:
+             err_details = str(e)
+        return {"error": "Unknown order processing error", "details": err_details}
+
+
+# === FastAPI Webhook Endpoint ===
 @app.post("/trade")
-async def trade_alert(request: Request):
-    data = await request.json()
-    print("🚨 Alert received:", data)
+async def receive_alert(request: Request):
+    """Receives trade alerts (webhooks) from TradingView."""
+    try:
+        # Ensure content type is application/json if needed, FastAPI usually handles this
+        data = await request.json()
+        logger.info(f"🚨 Alert received: {data}")
+    except Exception as e:
+         logger.error(f"Failed to parse incoming request JSON: {e}")
+         # Return a FastAPI specific error response if needed, e.g., raise HTTPException
+         raise HTTPException(status_code=400, detail="Invalid JSON received")
 
-    side = data.get("side")
-    symbol = data.get("symbol", "XAUUSD")
+    # --- Extract required fields (CASE-INSENSITIVE check for robustness) ---
+    # Use .lower() on keys if TradingView might send mixed case
+    data_lower = {k.lower(): v for k, v in data.items()}
 
-    if side not in ["buy", "sell"]:
-        return {"error": "Invalid order side"}
+    direction = data_lower.get("action") # Expects "action" key
+    symbol = data_lower.get("symbol")
+    size_str = data_lower.get("size", "1") # Default size to "1" as a string
 
-    return place_order(side, symbol)
+    # --- Validate extracted data ---
+    if not symbol:
+        logger.error("Webhook Error: 'symbol' not found in payload.")
+        raise HTTPException(status_code=400, detail="'symbol' missing from webhook data")
+
+    if direction not in ["buy", "sell"]:
+        logger.error(f"Webhook Error: Invalid 'action' received: '{direction}'")
+        raise HTTPException(status_code=400, detail=f"Invalid action: {direction}. Expected 'buy' or 'sell'.")
+
+    try:
+        size = float(size_str)
+        if size <= 0:
+             raise ValueError("Size must be positive")
+    except (ValueError, TypeError):
+         logger.warning(f"Invalid or missing 'size' in webhook: '{size_str}'. Using default size logic.")
+         # Use the helper function to get a default size based on symbol
+         size = get_trade_size(symbol)
+         logger.info(f"Using default size for {symbol}: {size}")
+
+
+    # --- Place the order ---
+    result = place_order(direction, symbol, size)
+
+    # --- Return response ---
+    if "error" in result:
+        # Forward the error, potentially with a 500 status if it was an internal error
+        status_code = 500 if "Server configuration error" in result.get("error","") or "Request failed" in result.get("error","") else 400
+        raise HTTPException(status_code=status_code, detail=result)
+    else:
+        # Return success status and Capital.com's response
+        return {"status": "ok", "capital_response": result}
+
+# Optional: Add a root endpoint for health checks
+@app.get("/")
+def read_root():
+    return {"Status": "Capital.com Trading Bot is running"}
+
+# Note: To run this locally for testing (outside Render), you might use:
+# import uvicorn
+# if __name__ == "__main__":
+#     # Ensure environment variables are set locally if testing this way
+#     # For example, using a .env file and python-dotenv
+#     # from dotenv import load_dotenv
+#     # load_dotenv()
+#     # Check credentials again after loading .env
+#     # CAPITAL_API_KEY = os.getenv("CAPITAL_API_KEY") ... etc ... check if None
+#     uvicorn.run(app, host="0.0.0.0", port=8000) # Or Render's expected port (e.g., 10000)
