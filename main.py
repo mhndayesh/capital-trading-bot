@@ -16,8 +16,8 @@ app = FastAPI()
 CAPITAL_EMAIL = os.getenv("CAPITAL_EMAIL")
 CAPITAL_PASS = os.getenv("CAPITAL_PASS")
 CAPITAL_API_KEY = os.getenv("CAPITAL_API_KEY")
-# Note: ACCOUNT_ID is now fetched dynamically from session
-# Note: CAPITAL_SECURITY_TOKEN env var is NO LONGER needed, we get it from the session
+# ACCOUNT_ID is now fetched dynamically
+# SECURITY_TOKEN is now fetched dynamically
 
 # --- Validate Credentials Needed for Session Login ---
 missing_vars = []
@@ -28,10 +28,12 @@ if not CAPITAL_API_KEY: missing_vars.append("CAPITAL_API_KEY") # Still needed fo
 if missing_vars:
     error_message = f"CRITICAL ERROR: Required environment variables are not set: {', '.join(missing_vars)}"
     logger.critical(error_message)
-    # sys.exit(f"Exiting: Missing environment variables: {', '.join(missing_vars)}") # Optional exit
+    # Consider exiting if critical variables are missing in production
+    # sys.exit(f"Exiting: Missing environment variables: {', '.join(missing_vars)}")
 
 
 # === Capital.com API Setup ===
+# <<<!!! VERIFY THIS BASE URL in Capital.com API Docs !!!>>>
 BASE_URL = "https://api-capital.backend-capital.com" # Production API endpoint
 # Demo endpoint (if needed for testing): "https://demo-api-capital.backend-capital.com"
 
@@ -43,7 +45,7 @@ BASE_HEADERS = {
     "Accept": "application/json"
 }
 
-# === Authentication Function === ### MODIFIED to extract Account ID ###
+# === Authentication Function === ### Gets Session Tokens & Account ID ###
 def get_session_tokens():
     """
     Logs into Capital.com using Email/Password to get session tokens AND accountId.
@@ -65,7 +67,8 @@ def get_session_tokens():
         response = requests.post(session_url, json=auth_data, headers=BASE_HEADERS, timeout=10)
 
         logger.info(f"Session Response Status Code: {response.status_code}")
-        logger.debug(f"Session Response Headers: {response.headers}") # DEBUG level recommended
+        # Log headers carefully in production, they contain sensitive tokens
+        logger.debug(f"Session Response Headers: {response.headers}") # DEBUG level for sensitive headers
 
         response_json = {} # Define outside the try block
         try:
@@ -82,13 +85,8 @@ def get_session_tokens():
         # Successful login - Extract tokens from RESPONSE HEADERS
         cst_token = response.headers.get('CST')
         x_sec_token = response.headers.get('X-SECURITY-TOKEN')
-        # --- ### ADDED: Extract accountId from RESPONSE BODY ### ---
-      # Inside get_session_tokens function
-
-        # --- ### ADDED: Extract accountId from RESPONSE BODY ### ---
-        account_id = response_json.get('currentAccountId') # <--- CORRECTED LINE
-        # --- ### END ADDED ### ---
-
+        # Extract accountId from RESPONSE BODY using correct key
+        account_id = response_json.get('currentAccountId')
 
         logger.info(f"Extracted CST from Headers: {'FOUND' if cst_token else 'MISSING'}")
         logger.info(f"Extracted X-SECURITY-TOKEN from Headers: {'FOUND' if x_sec_token else 'MISSING'}")
@@ -97,13 +95,13 @@ def get_session_tokens():
         # Check if ALL required pieces were found
         if cst_token and x_sec_token and account_id:
             logger.info("🔐 Successfully obtained session tokens (CST & X-SECURITY-TOKEN) and Account ID.")
-            # ### MODIFIED RETURN: Include account_id ###
+            # Return all three required pieces
             return {"cst": cst_token, "x_sec_token": x_sec_token, "account_id": str(account_id)} # Ensure account_id is string
         else:
             missing_items = []
             if not cst_token: missing_items.append("CST Header")
             if not x_sec_token: missing_items.append("X-SECURITY-TOKEN Header")
-            if not account_id: missing_items.append("accountId in Body")
+            if not account_id: missing_items.append("currentAccountId in Body") # Updated key name
             logger.error(f"Failed to extract required items from session response: {', '.join(missing_items)}")
             return None
 
@@ -137,10 +135,11 @@ def place_order(direction: str, symbol: str, size: float):
     # --- 1. Get dynamic session tokens AND accountId ---
     session_data = get_session_tokens()
     if not session_data:
+        # Failed to get session tokens, return specific error
         return {"error": "Authentication Failed", "details": "Could not obtain session tokens/accountId. Check email/password/API Key env vars and API connectivity."}
 
     # --- 2. Extract dynamic data ---
-    dynamic_account_id = session_data.get('account_id') # ### ADDED ### Extract dynamic ID
+    dynamic_account_id = session_data.get('account_id')
     cst_token = session_data.get('cst')
     x_sec_token = session_data.get('x_sec_token')
 
@@ -149,7 +148,6 @@ def place_order(direction: str, symbol: str, size: float):
     if not all([direction, symbol, size]): return {"error": "Missing order parameters"}
     if direction.lower() not in ["buy", "sell"]: return {"error": f"Invalid direction: {direction}"}
     if size <= 0: return {"error": f"Invalid size: {size}"}
-    # Use the dynamic account ID obtained from the session
     if not dynamic_account_id: return {"error": "Could not determine Account ID from session."}
 
     order_data = {
@@ -157,7 +155,7 @@ def place_order(direction: str, symbol: str, size: float):
         "side": direction.lower(),
         "type": "market",
         "quantity": size,
-        "accountId": dynamic_account_id # ### MODIFIED: Use dynamic ID ###
+        "accountId": dynamic_account_id # Use dynamic ID
     }
 
     # --- 4. Prepare Headers with ALL required tokens ---
@@ -166,21 +164,23 @@ def place_order(direction: str, symbol: str, size: float):
     headers_for_order['X-SECURITY-TOKEN'] = x_sec_token
 
     # --- 5. Send Order Request ---
-    endpoint = f"{BASE_URL}/api/v1/orders" # <--- Still using this endpoint
+    # <<<!!! VERIFY THIS PATH ('/api/v1/orders') and METHOD ('POST') in Capital.com API Docs !!!>>>
+    endpoint = f"{BASE_URL}/api/v1/orders" # This is the URL returning 404
     logger.info(f"📤 Sending order to {endpoint}: {order_data}")
     logger.debug(f"  Using Headers: {headers_for_order}")
 
     try:
         response = requests.post(endpoint, headers=headers_for_order, json=order_data, timeout=15)
-        response.raise_for_status()
+        response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
+
         logger.info(f"🧾 Order response: {response.status_code} {response.text}")
-        return response.json()
+        return response.json() # Return the JSON response from Capital.com
 
     except requests.exceptions.HTTPError as http_err:
         logger.error(f"HTTP error placing order: {http_err} - Response: {response.text}")
         try: error_details = response.json()
         except: error_details = response.text
-        return {"error": f"HTTP {response.status_code}", "details": error_details}
+        return {"error": f"HTTP {response.status_code}", "details": error_details} # Return dictionary indicating HTTP error
     except requests.exceptions.Timeout:
         logger.error("Timeout error placing order.")
         return {"error": "Request Timeout"}
@@ -205,59 +205,51 @@ async def receive_alert(request: Request):
          logger.error(f"Failed to parse incoming request JSON: {e}")
          raise HTTPException(status_code=400, detail="Invalid JSON received")
 
-    # --- Extract required fields (CASE-INSENSITIVE check for robustness) ---
+    # --- Extract required fields ---
     data_lower = {k.lower(): v for k, v in data.items()}
-    direction = data_lower.get("action") # Expects "action" key
+    direction = data_lower.get("action")
     symbol = data_lower.get("symbol")
-    size_str = data_lower.get("size", "1") # Default size to "1" as a string
+    size_str = data_lower.get("size", "1")
 
     # --- Validate extracted data ---
     if not symbol:
         logger.error("Webhook Error: 'symbol' not found in payload.")
         raise HTTPException(status_code=400, detail="'symbol' missing from webhook data")
-
     if not direction or direction.lower() not in ["buy", "sell"]:
         logger.error(f"Webhook Error: Invalid 'action' received: '{direction}'")
         raise HTTPException(status_code=400, detail=f"Invalid action: {direction}. Expected 'buy' or 'sell'.")
 
     try:
         size = float(size_str)
-        if size <= 0:
-             raise ValueError("Size must be positive")
+        if size <= 0: raise ValueError("Size must be positive")
     except (ValueError, TypeError):
          logger.warning(f"Invalid or missing 'size' in webhook: '{size_str}'. Using default size logic.")
-         size = get_trade_size(symbol) # Use the helper function
+         size = get_trade_size(symbol)
          logger.info(f"Using default size for {symbol}: {size}")
-
 
     # --- Place the order ---
     result = place_order(direction, symbol, size)
 
     # --- Return response ---
     if "error" in result:
-        # Determine appropriate status code based on error type returned by place_order
         error_detail = result.get("details", str(result.get("error", "Unknown Error")))
-        status_code = 500 # Default to server error
+        status_code = 500 # Default server error
+        # Set specific status codes based on returned error details
         if result.get("error") == "Authentication Failed" : status_code = 503 # Service Unavailable (auth failed)
-        # Check if details contain the 404 error specifically
-        elif result.get("error", "").startswith("HTTP 404") or '"status":404' in str(error_detail): status_code = 404
-        elif result.get("error", "").startswith("HTTP 4"): status_code = 400 # Other 4xx errors
+        elif "404" in str(result.get("error", "")) or '"status":404' in str(error_detail): status_code = 404 # Not Found
+        elif result.get("error", "").startswith("HTTP 4"): status_code = 400 # Other 4xx errors (like bad order params)
         elif result.get("error") == "Request Timeout": status_code = 504 # Gateway Timeout
         elif result.get("error") == "Request failed": status_code = 502 # Bad Gateway
 
-        # Raise HTTPException to return proper status code to TradingView/client
         raise HTTPException(status_code=status_code, detail=error_detail)
     else:
-        # Return success status and Capital.com's response
-        return {"status": "ok", "capital_response": result}
+        return {"status": "ok", "capital_response": result} # Success
 
 # Optional: Add a root endpoint for health checks
 @app.get("/")
 def read_root():
     return {"Status": "Capital.com Trading Bot is running"}
 
-# Note: To run this locally for testing (outside Render), you might use:
-# import uvicorn
-# if __name__ == "__main__":
-#     # Ensure environment variables are set locally if testing this way
-#     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
+# Note: To run this locally (outside Render), use uvicorn command line
+# Example: uvicorn main:app --host 0.0.0.0 --port 10000 --reload
+# Ensure local environment variables are set if testing locally.
