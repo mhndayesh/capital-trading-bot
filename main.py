@@ -5,8 +5,8 @@ import requests
 app = FastAPI()
 
 # Capital.com API credentials (set in Render environment or hardcoded for testing)
-CAPITAL_API_KEY = os.getenv(hPazUxfmhcehPjtd) or "hPazUxfmhcehPjtd"
-CAPITAL_ACCOUNT_ID = os.getenv(33244876) or "33244876"
+CAPITAL_API_KEY = os.getenv("hPazUxfmhcehPjtd") or "hPazUxfmhcehPjtd"
+CAPITAL_ACCOUNT_ID = os.getenv("33244876") or "33244876"
 
 # Capital.com API URL and headers
 BASE_URL = "https://api-capital.backend-capital.com"
