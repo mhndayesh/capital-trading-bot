@@ -121,6 +121,7 @@ def check_epic(symbol: str = Query(..., description="Search any symbol like USDJ
         }
 
 # === Health check ===
-@app.get("/")
-def read_root():
+@app.get("/", include_in_schema=False)
+@app.head("/", include_in_schema=False)
+def root():
     return {"status": "Capital Bot is running ✅"}
