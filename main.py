@@ -26,6 +26,21 @@ session_payload = {
     "encryptedPassword": False
 }
 
+# Hardcoded symbol-to-epic mapping
+TICKER_TO_EPIC = {
+    "GOLD": "CC.D.XAUUSD.CFD.IP",
+    "SILVER": "CC.D.XAGUSD.CFD.IP",
+    "EURUSD": "CS.D.EURUSD.CFD.IP",
+    "USDJPY": "CS.D.USDJPY.CFD.IP",
+    "XNGUSD": "CC.D.NATGAS.CFD.IP"
+
+    epic = TICKER_TO_EPIC.get(symbol.upper())
+if not epic:
+    return {"status": "error", "message": f"EPIC not found for: {symbol}"}
+
+
+}
+
 try:
     login_response = requests.post(session_url, headers=session_headers, json=session_payload)
     login_response.raise_for_status()
@@ -37,6 +52,7 @@ try:
 except Exception as e:
     print("❌ Login failed:", e)
     exit()
+
 
 # === TRADE PAYLOAD ===
 trade_url = f"{BASE_URL}/api/v1/positions"
