@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request
 import os
 import requests
 import logging
@@ -6,11 +6,12 @@ import logging
 app = FastAPI()
 
 # === Logging ===
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# === Capital.com API Credentials ===
+# === Capital API Credentials ===
 CAPITAL_API_KEY = os.getenv("CAPITAL_API_KEY")
+CAPITAL_PASS = os.getenv("CAPITAL_PASS")
 
 BASE_URL = "https://api-capital.backend-capital.com"
 BASE_HEADERS = {
@@ -19,60 +20,69 @@ BASE_HEADERS = {
     "Accept": "application/json"
 }
 
-# === Manual EPIC Mapping ===
+# === Hardcoded EPICs ===
 TICKER_TO_EPIC = {
     "GOLD": "CC.D.XAUUSD.CFD.IP",
     "SILVER": "CC.D.XAGUSD.CFD.IP",
-    "EURUSD": "CS.D.EURUSD.CFD.IP",
-    "USDJPY": "CS.D.USDJPY.CFD.IP",
-    "OIL": "CC.D.USOIL.CFD.IP",
-    "NATGAS": "CC.D.NATGAS.CFD.IP"
+    "EURUSD": "CS.D.EURUSD.MINI.IP",
+    "USDJPY": "CS.D.USDJPY.MINI.IP",
+    "OIL": "CC.D.BRENT.CMD/USD.IP",
+    "NATGAS": "CC.D.NATGAS.CMD/USD.IP"
 }
 
-@app.get("/")
-def read_root():
-    return {"status": "Capital Trading Bot is live using API Key 🔐"}
-
+# === Trade Endpoint ===
 @app.post("/trade")
-def place_trade(request: Request):
-    try:
-        data = request.json()
-    except Exception as e:
-        logger.error(f"Invalid JSON in request: {e}")
-        raise HTTPException(status_code=400, detail="Invalid JSON")
-
+async def place_trade(request: Request):
+    data = await request.json()
     symbol = data.get("symbol")
-    direction = data.get("action")
+    action = data.get("action")
     size = data.get("size")
-
-    if not symbol or not direction or not size:
-        raise HTTPException(status_code=400, detail="Missing required fields")
 
     epic = TICKER_TO_EPIC.get(symbol.upper())
     if not epic:
-        return {"error": f"Unknown symbol: {symbol}"}
+        return {"error": f"Could not find epic for: {symbol}"}
 
-    logger.info(f"Placing trade for {symbol} ({epic}): {direction} x {size}")
+    # Step 1: Login using API key + password
+    try:
+        login_res = requests.post(
+            f"{BASE_URL}/api/v1/session",
+            headers=BASE_HEADERS,
+            json={
+                "identifier": CAPITAL_API_KEY,
+                "password": CAPITAL_PASS
+            }
+        )
+        login_res.raise_for_status()
+        auth_data = login_res.json()
+        cst = auth_data["cst"]
+        x_security_token = auth_data["securityToken"]
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+    # Step 2: Place trade
+    trade_headers = {
+        **BASE_HEADERS,
+        "CST": cst,
+        "X-SECURITY-TOKEN": x_security_token
+    }
+
+    trade_payload = {
+        "epic": epic,
+        "direction": action.upper(),
+        "size": size,
+        "orderType": "MARKET",
+        "guaranteedStop": False,
+        "currencyCode": "USD",
+        "forceOpen": True
+    }
 
     try:
-        url = f"{BASE_URL}/api/v1/positions"
-        payload = {
-            "epic": epic,
-            "direction": direction.upper(),
-            "size": size,
-            "orderType": "MARKET",
-            "currencyCode": "USD",
-            "forceOpen": True,
-            "guaranteedStop": False,
-            "timeInForce": "FILL_OR_KILL",
-            "dealReference": f"bot-{symbol.lower()}"
-        }
-
-        response = requests.post(url, headers=BASE_HEADERS, json=payload)
-        response.raise_for_status()
-
-        return {"status": "ok", "response": response.json()}
-
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Trade failed: {e}")
+        trade_res = requests.post(
+            f"{BASE_URL}/api/v1/positions",
+            headers=trade_headers,
+            json=trade_payload
+        )
+        trade_res.raise_for_status()
+        return {"status": "ok", "response": trade_res.json()}
+    except Exception as e:
         return {"status": "error", "message": str(e)}
