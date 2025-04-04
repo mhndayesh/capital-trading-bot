@@ -1,13 +1,15 @@
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, Query
 import os
 import requests
 import logging
-from fastapi import Query
+
 app = FastAPI()
 
+# === Logging ===
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
+# === Env ===
 CAPITAL_API_KEY = os.getenv("CAPITAL_API_KEY")
 CAPITAL_EMAIL = os.getenv("CAPITAL_EMAIL")
 CAPITAL_PASS = os.getenv("CAPITAL_PASS")
@@ -19,14 +21,7 @@ BASE_HEADERS = {
     "Accept": "application/json"
 }
 
-TICKER_TO_EPIC = {
-    "XAUUSD": "CC.D.XAUUSD.CFD.IP",
-    "XAGUSD": "CC.D.XAGUSD.CFD.IP",
-    "EURUSD": "CS.D.EURUSD.MINI.IP",
-    "NATURALGAS": "CC.D.NATGAS.CFD.IP",
-    "XNGUSD": "CC.D.NATGAS.CFD.IP"
-}
-
+# === Auth ===
 def get_session():
     try:
         res = requests.post(f"{BASE_URL}/api/v1/session", headers=BASE_HEADERS, json={
@@ -42,6 +37,26 @@ def get_session():
         logger.error(f"Session login failed: {e}")
         return None
 
+# === Lookup EPIC from Capital.com ===
+def fetch_epic(symbol: str):
+    try:
+        url = f"{BASE_URL}/api/v1/markets?searchTerm={symbol}"
+        res = requests.get(url, headers={
+            "X-CAP-API-KEY": CAPITAL_API_KEY,
+            "Accept": "application/json"
+        })
+        res.raise_for_status()
+        markets = res.json().get("markets", [])
+        for m in markets:
+            if m.get("instrumentType") == "COMMODITIES" and m.get("expiry") in ["-", None]:
+                return m.get("epic")
+        if markets:
+            return markets[0].get("epic")
+    except Exception as e:
+        logger.error(f"EPIC fetch failed: {e}")
+    return None
+
+# === Place order ===
 def place_order(direction: str, epic: str, size: float):
     session = get_session()
     if not session:
@@ -64,6 +79,7 @@ def place_order(direction: str, epic: str, size: float):
         logger.error(f"Trade failed: {e}")
         return {"error": str(e)}
 
+# === POST /trade ===
 @app.post("/trade")
 async def receive_alert(request: Request):
     try:
@@ -75,72 +91,18 @@ async def receive_alert(request: Request):
         if direction not in ["buy", "sell"]:
             raise ValueError("Invalid action")
 
-        epic = TICKER_TO_EPIC.get(symbol.upper())
+        epic = fetch_epic(symbol)
         if not epic:
-            return {"error": f"Unknown symbol: {symbol}"}
+            return {"error": f"Could not find epic for: {symbol}"}
 
         result = place_order(direction, epic, size)
-        return {"status": "ok", "response": result}
+        return {"status": "ok", "epic": epic, "response": result}
 
     except Exception as e:
         logger.error(f"Webhook error: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
+# === GET / ===
 @app.get("/")
-def read_root():
-    return {"status": "Capital Trading Bot is running"}
-
-
-from fastapi import Query  # make sure this is at the top if not already
-
-from fastapi import Query
-
-@app.get("/check-epic")
-def check_epic(symbol: str = Query(..., description="Search symbol like XAUUSD")):
-    # Step 1: Login and get session tokens
-    login_url = f"{BASE_URL}/api/v1/session"
-    login_payload = {
-        "identifier": CAPITAL_EMAIL,
-        "password": CAPITAL_PASS
-    }
-
-    try:
-        login_response = requests.post(login_url, json=login_payload, headers=BASE_HEADERS)
-        login_response.raise_for_status()
-        cst = login_response.headers.get("CST")
-        x_sec = login_response.headers.get("X-SECURITY-TOKEN")
-    except Exception as e:
-        logger.error(f"Login failed: {e}")
-        return {"status": "error", "message": f"Login failed: {str(e)}"}
-
-    # Step 2: Use session tokens to call /markets
-    search_url = f"{BASE_URL}/api/v1/markets?searchTerm={symbol}"
-    headers = {
-        "X-CAP-API-KEY": CAPITAL_API_KEY,
-        "CST": cst,
-        "X-SECURITY-TOKEN": x_sec,
-        "Accept": "application/json"
-    }
-
-    try:
-        response = requests.get(search_url, headers=headers)
-        response.raise_for_status()
-        data = response.json().get("markets", [])
-        if not data:
-            return {"status": "not_found", "symbol": symbol, "epics": []}
-
-        return {
-            "status": "ok",
-            "symbol": symbol,
-            "epics": [
-                {
-                    "name": m.get("instrumentName"),
-                    "epic": m.get("epic"),
-                    "type": m.get("instrumentType"),
-                    "expiry": m.get("expiry")
-                } for m in data
-            ]
-        }
-    except Exception as e:
-        logger.error(f"EPIC lookup failed: {e}")
-        return {"status": "error", "message": str(e)}
+def root():
+    return {"status": "Capital Bot running"}
