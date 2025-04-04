@@ -3,13 +3,14 @@ import os
 import requests
 import logging
 
+# === FastAPI setup ===
 app = FastAPI()
 
 # === Logging ===
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
-# === ENV ===
+# === Capital.com credentials ===
 CAPITAL_API_KEY = os.getenv("CAPITAL_API_KEY")
 CAPITAL_EMAIL = os.getenv("CAPITAL_EMAIL")
 CAPITAL_PASS = os.getenv("CAPITAL_PASS")
@@ -21,17 +22,17 @@ BASE_HEADERS = {
     "Accept": "application/json"
 }
 
-# === Predefined EPICs (CFDs only!) ===
+# === Manual EPIC Mapping (fallbacks) ===
 TICKER_TO_EPIC = {
-    "XAUUSD": "CC.D.XAUUSD.CFD.IP",  # Gold CFD
-    "XAGUSD": "CC.D.XAGUSD.CFD.IP",  # Silver CFD
+    "XAUUSD": "GOLD",  # Gold CFD
+    "XAGUSD": "SILVER",  # Silver CFD
     "EURUSD": "CS.D.EURUSD.MINI.IP",
     "USDJPY": "CS.D.USDJPY.MINI.IP",
-    "NATGAS": "CC.D.NATGAS.CFD.IP",
-    "OIL": "CC.D.WTI.CFD.IP"  # US Oil CFD
+    "NATURALGAS": "CC.D.NATGAS.CFD.IP",
+    "OIL": "CC.D.WTI.CFD.IP"
 }
 
-# === Login to Capital.com ===
+# === Session function ===
 def get_session():
     try:
         res = requests.post(f"{BASE_URL}/api/v1/session", headers=BASE_HEADERS, json={
@@ -44,10 +45,10 @@ def get_session():
             "X-SECURITY-TOKEN": res.headers.get("X-SECURITY-TOKEN")
         }
     except Exception as e:
-        logger.error(f"❌ Session login failed: {e}")
+        logger.error(f"Session login failed: {e}")
         return None
 
-# === Place trade ===
+# === Place order ===
 def place_order(direction: str, epic: str, size: float):
     session = get_session()
     if not session:
@@ -58,8 +59,9 @@ def place_order(direction: str, epic: str, size: float):
 
     payload = {
         "epic": epic,
-        "direction": direction.upper(),  # BUY or SELL
-        "size": size
+        "direction": direction.upper(),
+        "size": size,
+        "orderType": "MARKET"
     }
 
     try:
@@ -67,66 +69,69 @@ def place_order(direction: str, epic: str, size: float):
         res.raise_for_status()
         return res.json()
     except Exception as e:
-        logger.error(f"❌ Trade error: {e}")
+        logger.error(f"Trade failed: {e}")
         return {"error": str(e)}
 
-# === /trade ===
+# === Trade webhook ===
 @app.post("/trade")
 async def receive_alert(request: Request):
     try:
         data = await request.json()
         direction = data.get("action")
-        symbol = data.get("symbol", "").upper()
+        symbol = data.get("symbol", "XAUUSD")
         size = float(data.get("size", 1))
 
         if direction not in ["buy", "sell"]:
             raise ValueError("Invalid action")
 
-        epic = TICKER_TO_EPIC.get(symbol)
+        epic = TICKER_TO_EPIC.get(symbol.upper())
         if not epic:
-            return {"error": f"❌ Could not find epic for: {symbol}"}
+            return {"error": f"Could not find epic for: {symbol}"}
 
         result = place_order(direction, epic, size)
         return {"status": "ok", "response": result}
 
     except Exception as e:
-        logger.error(f"❌ Webhook error: {e}")
+        logger.error(f"Webhook error: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
-# === /check-epic ===
-@app.get("/check-epic")
-def check_epic(symbol: str = Query(..., description="Search term like gold, silver, eurusd")):
-    url = f"{BASE_URL}/api/v1/markets?searchTerm={symbol}"
-    headers = {
-        "X-CAP-API-KEY": CAPITAL_API_KEY,
-        "Accept": "application/json"
-    }
+# === Health check ===
+@app.get("/")
+def read_root():
+    return {"status": "Capital Trading Bot is running"}
 
+# === EPIC checker ===
+@app.get("/check-epic")
+def check_epic(symbol: str = Query(..., description="Search any term like GOLD or USDJPY")):
     try:
+        session = get_session()
+        if not session:
+            return {"error": "Session failed"}
+
+        headers = BASE_HEADERS.copy()
+        headers.update(session)
+
+        url = f"{BASE_URL}/api/v1/markets?searchTerm={symbol}"
         response = requests.get(url, headers=headers)
         response.raise_for_status()
+
         markets = response.json().get("markets", [])
-
-        if not markets:
-            return {"status": "not_found", "symbol": symbol, "epics": []}
-
         return {
             "status": "ok",
-            "symbol": symbol,
+            "symbol": symbol.upper(),
             "epics": [
                 {
                     "name": m["instrumentName"],
                     "epic": m["epic"],
                     "type": m["instrumentType"],
-                    "expiry": m.get("expiry", "-")
+                    "expiry": m["expiry"]
                 } for m in markets
             ]
         }
-    except Exception as e:
-        logger.error(f"❌ EPIC lookup error: {e}")
-        return {"status": "error", "message": str(e)}
 
-# === Health check ===
-@app.get("/")
-def read_root():
-    return {"status": "✅ Capital Trading Bot is live"}
+    except Exception as e:
+        logger.error(f"EPIC lookup error: {e}")
+        return {
+            "status": "error",
+            "message": str(e)
+        }
