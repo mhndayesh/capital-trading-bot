@@ -1,86 +1,83 @@
 import os
 import requests
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
+from dotenv import load_dotenv
+
+load_dotenv()  # Optional for local .env testing
 
 app = FastAPI()
 
-# === CONFIG ===
-CAPITAL_API_KEY = os.getenv("CAPITAL_API_KEY") or "YOUR_API_KEY"
-CAPITAL_EMAIL = os.getenv("CAPITAL_EMAIL") or "your@email.com"
-CAPITAL_PASS = os.getenv("CAPITAL_PASS") or "your_api_password"
+CAPITAL_API_KEY = os.getenv("CAPITAL_API_KEY")
+CAPITAL_API_PASS = os.getenv("CAPITAL_PASS")
+CAPITAL_API_EMAIL = os.getenv("CAPITAL_EMAIL")
 
-# Use demo or live API
 BASE_URL = "https://api-capital.backend-capital.com"
-# For demo use: BASE_URL = "https://demo-api-capital.backend-capital.com"
+SESSION_URL = f"{BASE_URL}/api/v1/session"
+POSITIONS_URL = f"{BASE_URL}/api/v1/positions"
 
-# === LOGIN ===
-session_url = f"{BASE_URL}/api/v1/session"
-session_headers = {
+HEADERS = {
     "X-CAP-API-KEY": CAPITAL_API_KEY,
     "Content-Type": "application/json",
-    "Accept": "application/json"
-}
-session_payload = {
-    "identifier": CAPITAL_EMAIL,
-    "password": CAPITAL_PASS,
-    "encryptedPassword": False
+    "Accept": "application/json",
 }
 
-# Hardcoded symbol-to-epic mapping
+# Static mapping
 TICKER_TO_EPIC = {
     "GOLD": "CC.D.XAUUSD.CFD.IP",
     "SILVER": "CC.D.XAGUSD.CFD.IP",
     "EURUSD": "CS.D.EURUSD.CFD.IP",
     "USDJPY": "CS.D.USDJPY.CFD.IP",
     "XNGUSD": "CC.D.NATGAS.CFD.IP"
+}
+
+@app.post("/trade")
+def place_order(data: dict):
+    symbol = data.get("symbol")
+    action = data.get("action")
+    size = data.get("size")
 
     epic = TICKER_TO_EPIC.get(symbol.upper())
-if not epic:
-    return {"status": "error", "message": f"EPIC not found for: {symbol}"}
+    if not epic:
+        raise HTTPException(status_code=404, detail="EPIC not found")
 
+    session_payload = {
+        "identifier": CAPITAL_API_EMAIL,
+        "password": CAPITAL_API_PASS,
+        "encryptedPassword": False
+    }
 
-}
+    login_response = requests.post(SESSION_URL, headers=HEADERS, json=session_payload)
+    if login_response.status_code != 200:
+        return {"status": "error", "message": "Login failed", "details": login_response.text}
 
-try:
-    login_response = requests.post(session_url, headers=session_headers, json=session_payload)
-    login_response.raise_for_status()
     cst = login_response.headers.get("CST")
-    xst = login_response.headers.get("X-SECURITY-TOKEN")
-    if not cst or not xst:
-        raise ValueError("Login failed: Missing CST or X-SECURITY-TOKEN")
-    print("✅ Logged in successfully.")
-except Exception as e:
-    print("❌ Login failed:", e)
-    exit()
+    x_sec = login_response.headers.get("X-SECURITY-TOKEN")
 
+    if not cst or not x_sec:
+        return {"status": "error", "message": "Missing CST or Security Token"}
 
-# === TRADE PAYLOAD ===
-trade_url = f"{BASE_URL}/api/v1/positions"
-trade_headers = {
-    "X-CAP-API-KEY": CAPITAL_API_KEY,
-    "CST": cst,
-    "X-SECURITY-TOKEN": xst,
-    "Content-Type": "application/json",
-    "Accept": "application/json"
-}
+    order_headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "X-CAP-API-KEY": CAPITAL_API_KEY,
+        "CST": cst,
+        "X-SECURITY-TOKEN": x_sec
+    }
 
-# Example trade — GOLD CFD
-trade_payload = {
-    "epic": "CC.D.XAUUSD.CFD.IP",     # GOLD epic
-    "direction": "BUY",               # or "SELL"
-    "size": 2,                        # Trade size
-    "orderType": "MARKET",
-    "currencyCode": "USD",
-    "forceOpen": True,
-    "guaranteedStop": False
-}
+    order_payload = {
+        "epic": epic,
+        "direction": action.upper(),
+        "size": size,
+        "orderType": "MARKET",
+        "timeInForce": "FILL_OR_KILL",
+        "guaranteedStop": False,
+        "forceOpen": True,
+        "currencyCode": "USD"
+    }
 
-# === SEND ORDER ===
-try:
-    trade_response = requests.post(trade_url, headers=trade_headers, json=trade_payload)
-    trade_response.raise_for_status()
-    print("✅ Trade placed successfully!")
-    print("Response:", trade_response.json())
-except Exception as e:
-    print("❌ Trade failed:", e)
-    print("Response:", trade_response.text)
+    order_response = requests.post(POSITIONS_URL, headers=order_headers, json=order_payload)
+
+    if order_response.status_code == 200:
+        return {"status": "ok", "response": order_response.json()}
+    else:
+        return {"status": "error", "message": order_response.text}
