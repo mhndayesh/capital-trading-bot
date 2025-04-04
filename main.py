@@ -129,33 +129,36 @@ def get_trade_size(symbol: str) -> float:
 
 
 # === Place Order Function === ### MODIFIED to use dynamic accountId ###
+# === Place Order Function === ### MODIFIED for /positions endpoint ###
 def place_order(direction: str, symbol: str, size: float):
-    """Authenticates, prepares headers/payload, and sends a market order."""
+    """Authenticates, prepares headers/payload, and sends a request to open a position."""
 
     # --- 1. Get dynamic session tokens AND accountId ---
+    # Note: While accountId isn't sent in the body for /positions, getting the session
+    #       is still required to obtain the necessary CST and X-SECURITY-TOKEN headers.
     session_data = get_session_tokens()
     if not session_data:
-        # Failed to get session tokens, return specific error
-        return {"error": "Authentication Failed", "details": "Could not obtain session tokens/accountId. Check email/password/API Key env vars and API connectivity."}
+        return {"error": "Authentication Failed", "details": "Could not obtain session tokens. Check email/password/API Key env vars and API connectivity."}
 
-    # --- 2. Extract dynamic data ---
-    dynamic_account_id = session_data.get('account_id')
+    # --- 2. Extract dynamic data for Headers ---
     cst_token = session_data.get('cst')
     x_sec_token = session_data.get('x_sec_token')
+    # dynamic_account_id = session_data.get('account_id') # No longer needed for request body
 
-    # --- 3. Prepare Order Data ---
+    # --- 3. Prepare Position Data (Payload) ---
     # Basic input validation
     if not all([direction, symbol, size]): return {"error": "Missing order parameters"}
     if direction.lower() not in ["buy", "sell"]: return {"error": f"Invalid direction: {direction}"}
     if size <= 0: return {"error": f"Invalid size: {size}"}
-    if not dynamic_account_id: return {"error": "Could not determine Account ID from session."}
 
-    order_data = {
-        "market": symbol.upper(),
-        "side": direction.lower(),
-        "type": "market",
-        "quantity": size,
-        "accountId": dynamic_account_id # Use dynamic ID
+    # Use keys expected by /api/v1/positions endpoint
+    position_data = {
+        "epic": symbol.upper(),       # Use "epic" instead of "market"
+        "direction": direction.upper(), # API docs often specify uppercase BUY/SELL
+        "size": size                 # Use "size" instead of "quantity"
+        # Removed "type": "market" - likely implicit for /positions
+        # Removed "accountId" - likely determined by authentication tokens
+        # Add optional parameters like "guaranteedStop": True if needed based on docs/strategy
     }
 
     # --- 4. Prepare Headers with ALL required tokens ---
@@ -163,35 +166,38 @@ def place_order(direction: str, symbol: str, size: float):
     headers_for_order['CST'] = cst_token
     headers_for_order['X-SECURITY-TOKEN'] = x_sec_token
 
-    # --- 5. Send Order Request ---
-    # <<<!!! VERIFY THIS PATH ('/api/v1/orders') and METHOD ('POST') in Capital.com API Docs !!!>>>
-    endpoint = f"{BASE_URL}/api/v1/orders" # This is the URL returning 404
-    logger.info(f"📤 Sending order to {endpoint}: {order_data}")
+    # --- 5. Send Order Request to Correct Endpoint ---
+    # <<<!!! Using /api/v1/positions endpoint !!!>>>
+    endpoint = f"{BASE_URL}/api/v1/positions"
+    logger.info(f"📤 Sending position request to {endpoint}: {position_data}")
     logger.debug(f"  Using Headers: {headers_for_order}")
 
     try:
-        response = requests.post(endpoint, headers=headers_for_order, json=order_data, timeout=15)
+        response = requests.post(endpoint, headers=headers_for_order, json=position_data, timeout=15)
         response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
 
-        logger.info(f"🧾 Order response: {response.status_code} {response.text}")
-        return response.json() # Return the JSON response from Capital.com
+        logger.info(f"🧾 Position response: {response.status_code} {response.text}")
+        # The response for opening a position might just be a confirmation reference
+        return response.json()
 
     except requests.exceptions.HTTPError as http_err:
-        logger.error(f"HTTP error placing order: {http_err} - Response: {response.text}")
+        logger.error(f"HTTP error opening position: {http_err} - Response: {response.text}")
         try: error_details = response.json()
         except: error_details = response.text
-        return {"error": f"HTTP {response.status_code}", "details": error_details} # Return dictionary indicating HTTP error
+        # Check for specific Capital.com error structure if possible
+        # Example: if error_details.get("errorCode"): ...
+        return {"error": f"HTTP {response.status_code}", "details": error_details}
     except requests.exceptions.Timeout:
-        logger.error("Timeout error placing order.")
+        logger.error("Timeout error opening position.")
         return {"error": "Request Timeout"}
     except requests.exceptions.RequestException as req_err:
-        logger.error(f"Request failed placing order: {req_err}")
+        logger.error(f"Request failed opening position: {req_err}")
         return {"error": "Request failed", "details": str(req_err)}
     except Exception as e:
-        logger.error(f"Unexpected error during order placement or response processing: {e}", exc_info=True)
+        logger.error(f"Unexpected error during position placement or response processing: {e}", exc_info=True)
         err_details = str(e)
         if 'response' in locals() and hasattr(response, 'text'): err_details = response.text
-        return {"error": "Unknown order processing error", "details": err_details}
+        return {"error": "Unknown position processing error", "details": err_details}
 
 
 # === FastAPI Webhook Endpoint ===
