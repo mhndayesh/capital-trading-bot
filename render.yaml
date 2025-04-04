@@ -1,13 +1,15 @@
 services:
   - type: web
-    name: capital-bot-api
+    name: capital-flask-bot
     env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn main:app --host=0.0.0.0 --port=8000
+    startCommand: gunicorn app:app
     envVars:
       - key: CAPITAL_API_KEY
-        fromEnvVar: CAPITAL_API_KEY
-      - key: CAPITAL_EMAIL
-        fromEnvVar: CAPITAL_EMAIL
-      - key: CAPITAL_PASS
-        fromEnvVar: CAPITAL_PASS
+        sync: false
+      - key: CAPITAL_PASSWORD
+        sync: false
+      - key: CAPITAL_API_ENDPOINT
+        sync: false
+      - key: WEBHOOK_SECRET
+        sync: false
