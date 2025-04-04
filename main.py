@@ -10,10 +10,11 @@ CAPITAL_ACCOUNT_ID = "33244876"
 # ✅ Capital.com API setup
 BASE_URL = "https://api-capital.backend-capital.com"
 HEADERS = {
-    "X-CAP-API-KEY": CAPITAL_API_KEY,
+    "Authorization": f"Bearer {CAPITAL_API_KEY}",
     "Content-Type": "application/json",
     "Accept": "application/json"
 }
+
 
 # ✅ Trade size logic based on symbol
 def get_trade_size(symbol: str) -> float:
